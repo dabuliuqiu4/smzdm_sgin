@@ -1,0 +1,111 @@
+
+// 支持平台: Quantumult X
+// 使用说明: 需要先通过浏览器获取Cookie，支持多账号
+
+const AppGetCookieRegex = /^https?:\/\/user-api\.smzdm\.com\/checkin$/;
+const smzdmCookieKey = "smzdm_cookie";
+const smzdmCookieIdKey = "smzdm_cookie_id";
+const clickFavArticleMaxTimes = 7;
+
+// ======================== 工具函数 ========================
+function md5(input) {
+  // MD5 实现代码保持原样
+  // [原MD5代码...]
+}
+
+function randomStr(len = 18) {
+  let char = "0123456789";
+  return Array.from({length: len}, () => char.charAt(Math.floor(Math.random() * char.length))).join('');
+}
+
+function showNotification(title, subtitle, body, opts) {
+  $notify(title, subtitle, body, opts);
+}
+
+// ======================== 存储管理 ========================
+function readData(key, defaultValue = null, session = "") {
+  const data = $persistentStore.read(key) || '{}';
+  try {
+    const jsonData = JSON.parse(data);
+    return session ? (jsonData[session] || defaultValue) : jsonData;
+  } catch {
+    return defaultValue;
+  }
+}
+
+function writeData(key, value, session = "") {
+  let data = {};
+  try {
+    data = JSON.parse($persistentStore.read(key) || {};
+  } catch {}
+  if (session) {
+    data[session] = value;
+    data.magic_session = true;
+  } else {
+    data = value;
+  }
+  $persistentStore.write(JSON.stringify(data), key);
+}
+
+// ======================== 核心逻辑 ========================
+async function androidSignin(username) {
+  const currentCookie = readData(smzdmCookieKey, "", username);
+  const smzdmToken = currentCookie.match(/sess=([^;]+)/)[1];
+  const smzdmKey = 'apr1$AwP!wRRT$gJ/q.X24poeBInlUJC';
+  const outcome = Math.round(Date.now() / 1000).toString();
+  
+  const rawData = `f=android&sk=${username}&time=${outcome}000&token=${smzdmToken}&v=9.9.12&weixin=1&key=${smzdmKey}`;
+  const sign = md5(rawData).toUpperCase();
+
+  const result = await $task.fetch({
+    url: "https://user-api.smzdm.com/checkin",
+    method: "POST",
+    headers: {
+      'User-Agent': 'smzdm 10.4.20 rv:134.2 (iPhone 11; iOS 15.5; zh_CN)/iphone_smzdmapp/10.4.20',
+      'Cookie': currentCookie,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: `sk=${username}&sign=${sign}&weixin=1&v=9.9.12&captcha=&f=android&token=${encodeURIComponent(smzdmToken)}&touchstone_event=&time=${outcome}000`
+  });
+
+  return JSON.parse(result.body);
+}
+
+// ======================== 主流程 ========================
+async function main() {
+  // 获取所有账号
+  const accounts = Object.keys(JSON.parse($persistentStore.read(smzdmCookieKey) || {}).filter(k => k !== 'magic_session');
+  
+  for (const account of accounts) {
+    const cookie = readData(smzdmCookieKey, "", account);
+    
+    // 执行签到
+    const signResult = await androidSignin(account);
+    if (signResult.error_code === 0) {
+      showNotification("签到成功", `账号: ${account}`, `连续签到: ${signResult.data.daily_checkin_num}天`);
+    } else {
+      showNotification("签到失败", `账号: ${account}`, signResult.error_msg);
+    }
+    
+    // 执行其他任务...
+  }
+}
+
+// 自动触发
+if (typeof $request !== 'undefined') {
+  // Cookie 获取逻辑
+  if (AppGetCookieRegex.test($request.url)) {
+    const cookie = $request.headers['Cookie'] || $request.headers['cookie'];
+    const sessionId = cookie.match(/(?:session_id|sess)=([^;]+)/)[0];
+    const accountName = "用户" + Date.now().toString().slice(-4);
+    
+    writeData(smzdmCookieKey, cookie, accountName);
+    writeData(smzdmCookieIdKey, sessionId, accountName);
+    
+    showNotification("Cookie 获取成功", accountName, "已保存到持久化存储");
+  }
+  $done({});
+} else {
+  // 手动执行
+  main().finally(() => $done());
+}
